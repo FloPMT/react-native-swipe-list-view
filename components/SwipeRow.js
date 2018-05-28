@@ -38,6 +38,8 @@ class SwipeRow extends Component {
 		this.parentScrollEnabled = true;
 		this.ranPreview = false;
 		this._ensureScrollEnabledTimer = null;
+		this.disableLeftSwipeManuel = props.disableLeftSwipe;
+		this.rowOpend = false;
 		this.state = {
 			dimensionsSet: false,
 			hiddenHeight: 0,
@@ -54,6 +56,10 @@ class SwipeRow extends Component {
 			onPanResponderTerminate: (e, gs) => this.handlePanResponderEnd(e, gs),
 			onShouldBlockNativeResponder: _ => false,
 		});
+	}
+
+	componentWillReceiveProps(nextProps) {
+		this.disableLeftSwipeManuel = nextProps.disableLeftSwipe;
 	}
 
 	componentWillUnmount() {
@@ -78,9 +84,9 @@ class SwipeRow extends Component {
 			this.ranPreview = true;
 			let previewOpenValue = this.props.previewOpenValue || this.props.rightOpenValue * 0.5;
 			this.getPreviewAnimation(previewOpenValue, this.props.previewOpenDelay)
-			.start( _ => {
-				this.getPreviewAnimation(0, PREVIEW_CLOSE_DELAY).start();
-			});
+				.start(_ => {
+					this.getPreviewAnimation(0, PREVIEW_CLOSE_DELAY).start();
+				});
 		}
 	}
 
@@ -130,7 +136,7 @@ class SwipeRow extends Component {
 			}
 
 			let newDX = this.swipeInitialX + dx;
-			if (this.props.disableLeftSwipe  && newDX < 0) { newDX = 0; }
+			if ((this.props.disableLeftSwipe || this.disableLeftSwipeManuel) && newDX < 0) { newDX = 0; }
 			if (this.props.disableRightSwipe && newDX > 0) { newDX = 0; }
 
 
@@ -165,24 +171,24 @@ class SwipeRow extends Component {
 		if (this._translateX._value >= 0) {
 			// trying to swipe right
 			if (this.swipeInitialX < this._translateX._value) {
-				if ((this._translateX._value - projectedExtraPixels) > this.props.leftOpenValue * (this.props.swipeToOpenPercent/100)) {
+				if ((this._translateX._value - projectedExtraPixels) > this.props.leftOpenValue * (this.props.swipeToOpenPercent / 100)) {
 					// we're more than halfway
 					toValue = this.props.leftOpenValue;
 				}
 			} else {
-				if ((this._translateX._value - projectedExtraPixels) > this.props.leftOpenValue * (1 - (this.props.swipeToClosePercent/100))) {
+				if ((this._translateX._value - projectedExtraPixels) > this.props.leftOpenValue * (1 - (this.props.swipeToClosePercent / 100))) {
 					toValue = this.props.leftOpenValue;
 				}
 			}
 		} else {
 			// trying to swipe left
 			if (this.swipeInitialX > this._translateX._value) {
-				if ((this._translateX._value - projectedExtraPixels) < this.props.rightOpenValue * (this.props.swipeToOpenPercent/100)) {
+				if ((this._translateX._value - projectedExtraPixels) < this.props.rightOpenValue * (this.props.swipeToOpenPercent / 100)) {
 					// we're more than halfway
 					toValue = this.props.rightOpenValue;
 				}
 			} else {
-				if ((this._translateX._value - projectedExtraPixels) < this.props.rightOpenValue * (1 - (this.props.swipeToClosePercent/100))) {
+				if ((this._translateX._value - projectedExtraPixels) < this.props.rightOpenValue * (1 - (this.props.swipeToClosePercent / 100))) {
 					toValue = this.props.rightOpenValue;
 				}
 			}
@@ -198,6 +204,20 @@ class SwipeRow extends Component {
 		this.manuallySwipeRow(0);
 	}
 
+	/*
+	 * This method is called by SwipeListView
+	 */
+	setDisableLeftSwipeManuel(disabled) {
+		this.disableLeftSwipeManuel = disabled;
+	}
+	/*
+	 * This method is called by SwipeListView
+	 */
+	isRowOpend() {
+		return this.rowOpend;
+	}
+
+
 	manuallySwipeRow(toValue) {
 		Animated.spring(
 			this._translateX,
@@ -206,7 +226,7 @@ class SwipeRow extends Component {
 				friction: this.props.friction,
 				tension: this.props.tension,
 			}
-		).start( _ => {
+		).start(_ => {
 			this.ensureScrollEnabled()
 			if (toValue === 0) {
 				this.props.onRowDidClose && this.props.onRowDidClose();
@@ -216,8 +236,10 @@ class SwipeRow extends Component {
 		});
 
 		if (toValue === 0) {
+			this.rowOpend = false;
 			this.props.onRowClose && this.props.onRowClose();
 		} else {
+			this.rowOpend = true;
 			this.props.onRowOpen && this.props.onRowOpen(toValue);
 		}
 
@@ -247,7 +269,7 @@ class SwipeRow extends Component {
 		return (
 			<TouchableOpacity
 				activeOpacity={1}
-				onPress={ _ => this.onRowPress() }
+				onPress={_ => this.onRowPress()}
 			>
 				{this.props.children[1]}
 			</TouchableOpacity>
@@ -261,12 +283,11 @@ class SwipeRow extends Component {
 		if (this.state.dimensionsSet) {
 			return (
 				<Animated.View
-					manipulationModes={['translateX']}
 					{...this._panResponder.panHandlers}
 					style={{
 						zIndex: 2,
 						transform: [
-							{translateX: this._translateX}
+							{ translateX: this._translateX }
 						]
 					}}
 				>
@@ -276,13 +297,12 @@ class SwipeRow extends Component {
 		} else {
 			return (
 				<Animated.View
-					manipulationModes={['translateX']}
 					{...this._panResponder.panHandlers}
-					onLayout={ (e) => this.onContentLayout(e) }
+					onLayout={(e) => this.onContentLayout(e)}
 					style={{
 						zIndex: 2,
 						transform: [
-							{translateX: this._translateX}
+							{ translateX: this._translateX }
 						]
 					}}
 				>
@@ -430,7 +450,7 @@ SwipeRow.propTypes = {
 	 * What % of the left/right openValue does the user need to swipe
 	 * past to trigger the row closing.
 	 */
-	swipeToClosePercent: PropTypes.number
+	swipeToClosePercent: PropTypes.number,
 };
 
 SwipeRow.defaultProps = {

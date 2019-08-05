@@ -271,13 +271,13 @@ class SwipeRow extends Component {
 	/*
 	 * This method is called by SwipeListView
 	 */
-	setDisableLeftSwipeManuel(disabled) {
+	setDisableLeftSwipeManual(disabled) {
 		this.disableLeftSwipeManuel = disabled;
 	}
 	/*
 	 * This method is called by SwipeListView
 	 */
-	isRowOpend() {
+	isRowOpened() {
 		return this.rowOpend;
 	}
 

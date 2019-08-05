@@ -5,9 +5,9 @@ import React, {
 } from 'react';
 import PropTypes from 'prop-types';
 import {
+	Dimensions,
 	Animated,
 	PanResponder,
-	Platform,
 	StyleSheet,
 	TouchableOpacity,
 	ViewPropTypes,
@@ -33,6 +33,9 @@ class SwipeRow extends Component {
 
 	constructor(props) {
 		super(props);
+		this.isOpen = false;
+		this.previousTrackedTranslateX = 0;
+		this.previousTrackedDirection = null;
 		this.horizontalSwipeGestureBegan = false;
 		this.swipeInitialX = null;
 		this.parentScrollEnabled = true;
@@ -40,15 +43,14 @@ class SwipeRow extends Component {
 		this._ensureScrollEnabledTimer = null;
 		this.disableLeftSwipeManuel = props.disableLeftSwipe;
 		this.rowOpend = false;
+		this.isForceClosing = false;
 		this.state = {
 			dimensionsSet: false,
-			hiddenHeight: 0,
-			hiddenWidth: 0
+			hiddenHeight: this.props.disableHiddenLayoutCalculation ? '100%' : 0,
+			hiddenWidth: this.props.disableHiddenLayoutCalculation ? '100%' : 0
 		};
 		this._translateX = new Animated.Value(0);
-	}
-
-	componentWillMount() {
+		
 		this._panResponder = PanResponder.create({
 			onMoveShouldSetPanResponder: (e, gs) => this.handleOnMoveShouldSetPanResponder(e, gs),
 			onPanResponderMove: (e, gs) => this.handlePanResponderMove(e, gs),
@@ -56,6 +58,46 @@ class SwipeRow extends Component {
 			onPanResponderTerminate: (e, gs) => this.handlePanResponderEnd(e, gs),
 			onShouldBlockNativeResponder: _ => false,
 		});
+
+		if (this.props.onSwipeValueChange) {
+			this._translateX.addListener(({ value }) => {
+				let direction = this.previousTrackedDirection;
+				if (value !== this.previousTrackedTranslateX) {
+					direction = value > this.previousTrackedTranslateX ? 'right' : 'left';
+				}
+				this.props.onSwipeValueChange && this.props.onSwipeValueChange({
+					isOpen: this.isOpen,
+					direction,
+					value,
+				});
+				this.previousTrackedTranslateX = value;
+				this.previousTrackedDirection = direction;
+			});
+		}
+
+		if (this.props.forceCloseToRightThreshold && this.props.forceCloseToRightThreshold > 0) {
+			this._translateX.addListener(({ value }) => {
+				if(!this.isForceClosing && (Dimensions.get('window').width + value) < this.props.forceCloseToRightThreshold) {
+					this.isForceClosing = true;
+					this.forceCloseRow("right");
+					if(this.props.onForceCloseToRight) {
+						this.props.onForceCloseToRight();
+					}
+				}
+			});
+		}
+
+		if (this.props.forceCloseToLeftThreshold && this.props.forceCloseToRightThreshold > 0) {
+			this._translateX.addListener(({ value }) => {
+				if(!this.isForceClosing && (Dimensions.get('window').width - value) < this.props.forceCloseToLeftThreshold) {
+					this.isForceClosing = true;
+					this.forceCloseRow("left");
+					if(this.props.onForceCloseToLeft) {
+						this.props.onForceCloseToLeft();
+					}
+				}
+			});
+		}
 	}
 
 	componentWillReceiveProps(nextProps) {
@@ -64,20 +106,34 @@ class SwipeRow extends Component {
 
 	componentWillUnmount() {
 		clearTimeout(this._ensureScrollEnabledTimer)
+		this._translateX.removeAllListeners();
+	}
+
+	shouldComponentUpdate(nextProps, nextState) {
+		if (this.state.hiddenHeight !== nextState.hiddenHeight ||
+			this.state.hiddenWidth !== nextState.hiddenWidth ||
+			!this.props.shouldItemUpdate ||
+			(this.props.shouldItemUpdate && this.props.shouldItemUpdate(this.props.item, nextProps.item))) {
+			return true
+		}
+
+		return false;
 	}
 
 	getPreviewAnimation(toValue, delay) {
 		return Animated.timing(
 			this._translateX,
-			{ duration: this.props.previewDuration, toValue, delay }
+			{ duration: this.props.previewDuration, toValue, delay, useNativeDriver: this.props.useNativeDriver }
 		);
 	}
 
 	onContentLayout(e) {
 		this.setState({
 			dimensionsSet: !this.props.recalculateHiddenLayout,
-			hiddenHeight: e.nativeEvent.layout.height,
-			hiddenWidth: e.nativeEvent.layout.width,
+			...(!this.props.disableHiddenLayoutCalculation ? {
+				hiddenHeight: e.nativeEvent.layout.height,
+				hiddenWidth: e.nativeEvent.layout.width,
+			} : {})
 		});
 
 		if (this.props.preview && !this.ranPreview) {
@@ -106,6 +162,12 @@ class SwipeRow extends Component {
 	}
 
 	handlePanResponderMove(e, gestureState) {
+		/* If the view is force closing, then ignore Moves. Return */
+		if(this.isForceClosing) {
+			return;
+		}
+
+		/* Else, do normal job */
 		const { dx, dy } = gestureState;
 		const absDx = Math.abs(dx);
 		const absDy = Math.abs(dy);
@@ -144,7 +206,6 @@ class SwipeRow extends Component {
 			if (this.props.stopRightSwipe && newDX < this.props.stopRightSwipe) { newDX = this.props.stopRightSwipe; }
 
 			this._translateX.setValue(newDX);
-
 		}
 	}
 
@@ -156,7 +217,10 @@ class SwipeRow extends Component {
 	}
 
 	handlePanResponderEnd(e, gestureState) {
-
+		/* PandEnd will reset the force-closing state when it's true. */
+		if(this.isForceClosing) {
+			this.isForceClosing = false;
+		}
 		// decide how much the velocity will affect the final position that the list item settles in.
 		const swipeToOpenVelocityContribution = this.props.swipeToOpenVelocityContribution;
 		const possibleExtraPixels = this.props.rightOpenValue * (swipeToOpenVelocityContribution);
@@ -217,21 +281,54 @@ class SwipeRow extends Component {
 		return this.rowOpend;
 	}
 
-
-	manuallySwipeRow(toValue) {
+	/**
+	 * Force close the row toward the end of the given direction.
+	 * @param  {String} direction The direction to force close.
+	 */
+	forceCloseRow(direction) {
+		this.manuallySwipeRow(0, () => {
+			if(direction === "right" && this.props.onForceCloseToRightEnd) {
+				this.props.onForceCloseToRightEnd();
+			}
+			else if(direction === "left" && this.props.onForceCloseToLeftEnd) {
+				this.props.onForceCloseToLeftEnd();
+			}
+		});
+	}
+	
+	closeRowWithoutAnimation() {
+		this._translateX.setValue(0);
+		
+		this.ensureScrollEnabled();
+		this.isOpen = false;
+		this.props.onRowDidClose && this.props.onRowDidClose();
+		
+		this.props.onRowClose && this.props.onRowClose();
+		
+		this.swipeInitialX = null;
+		this.horizontalSwipeGestureBegan = false;
+	}
+	
+	manuallySwipeRow(toValue, onAnimationEnd) {
 		Animated.spring(
 			this._translateX,
 			{
 				toValue,
 				friction: this.props.friction,
 				tension: this.props.tension,
+				useNativeDriver: this.props.useNativeDriver,
 			}
 		).start(_ => {
 			this.ensureScrollEnabled()
 			if (toValue === 0) {
+				this.isOpen = false;
 				this.props.onRowDidClose && this.props.onRowDidClose();
 			} else {
-				this.props.onRowDidOpen && this.props.onRowDidOpen();
+				this.isOpen = true;
+				this.props.onRowDidOpen && this.props.onRowDidOpen(toValue);
+			}
+			if(onAnimationEnd) {
+				onAnimationEnd();
 			}
 		});
 
@@ -253,9 +350,9 @@ class SwipeRow extends Component {
 		const onPress = this.props.children[1].props.onPress;
 
 		if (onPress) {
-			const newOnPress = _ => {
+			const newOnPress = (...args) => {
 				this.onRowPress();
-				onPress();
+				onPress(...args);
 			}
 			return React.cloneElement(
 				this.props.children[1],
@@ -407,6 +504,10 @@ SwipeRow.propTypes = {
 	 */
 	recalculateHiddenLayout: PropTypes.bool,
 	/**
+	 * Disable hidden row onLayout calculations
+	 */
+	disableHiddenLayoutCalculation: PropTypes.bool,
+	/**
 	 * Called when a swipe row is animating closed
 	 */
 	onRowClose: PropTypes.func,
@@ -451,6 +552,42 @@ SwipeRow.propTypes = {
 	 * past to trigger the row closing.
 	 */
 	swipeToClosePercent: PropTypes.number,
+	/**
+	 * callback to determine whether component should update (currentItem, newItem)
+	 */
+	shouldItemUpdate: PropTypes.func,
+	/**
+	 * Callback invoked any time the swipe value of the row is changed
+	 */
+	onSwipeValueChange: PropTypes.func,
+	/**
+	 * TranslateX amount(not value!) threshold that triggers force-closing the row to the Left End (positive number)
+	 */
+	forceCloseToLeftThreshold: PropTypes.number,
+	/**
+	 * TranslateX amount(not value!) threshold that triggers force-closing the row to the Right End (positive number)
+	 */
+	forceCloseToRightThreshold: PropTypes.number,
+	/**
+	 * Callback invoked when row is force closing to the Left End
+	 */
+	onForceCloseToLeft: PropTypes.func,
+	/**
+	 * Callback invoked when row is force closing to the Right End
+	 */
+	onForceCloseToRight: PropTypes.func,
+	/**
+	 * Callback invoked when row has finished force closing to the Left End
+	 */
+	onForceCloseToLeftEnd: PropTypes.func,
+	/**
+	 * Callback invoked when row has finished force closing to the Right End
+	 */
+	onForceCloseToRightEnd: PropTypes.func,
+	/**
+	 * useNativeDriver: true for all animations where possible
+	 */
+	useNativeDriver: PropTypes.bool,
 };
 
 SwipeRow.defaultProps = {
@@ -460,13 +597,16 @@ SwipeRow.defaultProps = {
 	disableLeftSwipe: false,
 	disableRightSwipe: false,
 	recalculateHiddenLayout: false,
+	disableHiddenLayoutCalculation: false,
 	preview: false,
 	previewDuration: 300,
 	previewOpenDelay: DEFAULT_PREVIEW_OPEN_DELAY,
 	directionalDistanceChangeThreshold: 2,
 	swipeToOpenPercent: 50,
 	swipeToOpenVelocityContribution: 0,
-	swipeToClosePercent: 50
+	swipeToClosePercent: 50,
+	item: {},
+	useNativeDriver: true,
 };
 
 export default SwipeRow;
